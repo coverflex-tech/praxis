@@ -1,5 +1,5 @@
 {
-  "name": "@dfilipes/praxis",
+  "name": "@coverflex-tech/praxis",
   "version": "0.1.0",
   "description": "AI-assisted development workflow — portable agent skills and sub-agents",
   "type": "module",

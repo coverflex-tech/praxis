@@ -32,14 +32,14 @@ describe('fetchTemplates', () => {
   it('returns a Map of .agents/ files from a valid tarball', async () => {
     const tmpDir = await mkdtemp(join(tmpdir(), 'test-tarball-'));
     try {
-      const prefixDir = join(tmpDir, 'DFilipeS-praxis-abc123');
+      const prefixDir = join(tmpDir, 'coverflex-tech-praxis-abc123');
       await mkdir(join(prefixDir, '.agents'), { recursive: true });
       await writeFile(join(prefixDir, '.agents', 'test.md'), '# Test');
       await writeFile(join(prefixDir, 'README.md'), '# Readme');
 
       await createTar(
         { gzip: true, file: join(tmpDir, 'test.tar.gz'), cwd: tmpDir },
-        ['DFilipeS-praxis-abc123'],
+        ['coverflex-tech-praxis-abc123'],
       );
       const tarBuffer = await readFile(join(tmpDir, 'test.tar.gz'));
 
@@ -97,7 +97,7 @@ describe('fetchTemplates', () => {
   it('filters out non-.agents/ files from the tarball', async () => {
     const tmpDir = await mkdtemp(join(tmpdir(), 'test-tarball-'));
     try {
-      const prefixDir = join(tmpDir, 'DFilipeS-praxis-abc123');
+      const prefixDir = join(tmpDir, 'coverflex-tech-praxis-abc123');
       await mkdir(join(prefixDir, '.agents', 'sub'), { recursive: true });
       await writeFile(join(prefixDir, '.agents', 'skill.md'), '# Skill');
       await writeFile(join(prefixDir, '.agents', 'sub', 'nested.md'), '# Nested');
@@ -105,7 +105,7 @@ describe('fetchTemplates', () => {
 
       await createTar(
         { gzip: true, file: join(tmpDir, 'test.tar.gz'), cwd: tmpDir },
-        ['DFilipeS-praxis-abc123'],
+        ['coverflex-tech-praxis-abc123'],
       );
       const tarBuffer = await readFile(join(tmpDir, 'test.tar.gz'));
 
