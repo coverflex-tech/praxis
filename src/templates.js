@@ -5,7 +5,7 @@ import { Readable } from "node:stream";
 import { extract } from "tar";
 
 const TARBALL_URL =
-  "https://api.github.com/repos/DFilipeS/praxis/tarball/main";
+  "https://api.github.com/repos/coverflex-tech/praxis/tarball/main";
 
 const MAX_DOWNLOAD_SIZE = 10 * 1024 * 1024; // 10 MB
 
