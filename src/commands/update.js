@@ -11,9 +11,31 @@ import {
   readManifest,
   writeManifest,
 } from "../manifest.js";
+import { populateToolDirs } from "../populate-tool-dirs.js";
 
-export async function update() {
+const OPENCODE_MSG =
+  "OpenCode is not yet supported. See https://github.com/coverflex-tech/praxis#readme for status.";
+
+function failToolUsage(message, code = 1) {
+  process.stderr.write(`Error: ${message}\n`);
+  process.exit(code);
+}
+
+function getToolIdsFromOptions(opts = {}) {
+  const ids = [];
+  if (opts.cursor) ids.push("cursor");
+  if (opts.claude) ids.push("claude");
+  if (opts.opencode) ids.push("opencode");
+  return ids;
+}
+
+export async function update(opts = {}) {
   const projectRoot = process.cwd();
+  const optionToolIds = getToolIdsFromOptions(opts);
+
+  if (optionToolIds.includes("opencode")) {
+    failToolUsage(OPENCODE_MSG, 1);
+  }
 
   p.intro(pc.bold("Praxis — Update"));
 
@@ -64,101 +86,80 @@ export async function update() {
     }
   }
 
-  if (
+  const noTemplateChanges =
     newFiles.length === 0 &&
     changedFiles.length === 0 &&
-    removedFiles.length === 0
-  ) {
+    removedFiles.length === 0;
+
+  const hasToolsToRefresh =
+    (manifest.tools && manifest.tools.length > 0) || optionToolIds.length > 0;
+
+  if (noTemplateChanges && !hasToolsToRefresh) {
     p.outro("Everything is up to date!");
     return;
   }
 
-  // Summary of what will happen
-  if (newFiles.length > 0) {
-    p.log.info(`${pc.green(newFiles.length)} new file(s) to add`);
-  }
-  if (changedFiles.length > 0) {
-    p.log.info(`${pc.yellow(changedFiles.length)} file(s) changed in Praxis`);
-  }
-  if (removedFiles.length > 0) {
-    p.log.info(
-      `${pc.red(removedFiles.length)} file(s) removed from Praxis`
-    );
-  }
-
-  const updatedManifestFiles = { ...manifest.files };
+  let updatedManifestFiles = { ...manifest.files };
   let added = 0;
   let updated = 0;
   let removed = 0;
   let skipped = 0;
 
-  // Handle new files
-  for (const { relativePath, content, hash } of newFiles) {
-    const resolvedPath = resolve(projectRoot, relativePath);
-    if (!resolvedPath.startsWith(resolve(projectRoot))) {
-      continue;
+  if (!noTemplateChanges) {
+    // Summary of what will happen
+    if (newFiles.length > 0) {
+      p.log.info(`${pc.green(newFiles.length)} new file(s) to add`);
+    }
+    if (changedFiles.length > 0) {
+      p.log.info(`${pc.yellow(changedFiles.length)} file(s) changed in Praxis`);
+    }
+    if (removedFiles.length > 0) {
+      p.log.info(
+        `${pc.red(removedFiles.length)} file(s) removed from Praxis`
+      );
     }
 
-    const fullPath = join(projectRoot, relativePath);
-    await mkdir(dirname(fullPath), { recursive: true });
-    await writeFile(fullPath, content);
-    updatedManifestFiles[relativePath] = { hash };
-    added++;
-    p.log.success(`${pc.green("added")} ${relativePath}`);
-  }
-
-  // Handle changed files
-  for (const { relativePath, content, hash } of changedFiles) {
-    const resolvedPath = resolve(projectRoot, relativePath);
-    if (!resolvedPath.startsWith(resolve(projectRoot))) {
-      continue;
-    }
-
-    const fullPath = join(projectRoot, relativePath);
-
-    const locallyModified = existsSync(fullPath)
-      ? await isLocallyModified(projectRoot, relativePath, manifest)
-      : false;
-
-    if (!locallyModified) {
-      await writeFile(fullPath, content);
-      updatedManifestFiles[relativePath] = { hash };
-      updated++;
-      p.log.success(`${pc.yellow("updated")} ${relativePath}`);
-    } else {
-      const localContent = await readFile(fullPath, "utf-8");
-      let action = await p.select({
-        message: `${relativePath} has local changes and a new Praxis version. What would you like to do?`,
-        options: [
-          { value: "overwrite", label: "Overwrite with new Praxis version" },
-          { value: "skip", label: "Keep your version" },
-          { value: "diff", label: "Show diff, then decide" },
-        ],
-      });
-
-      if (p.isCancel(action)) {
-        p.cancel("Cancelled.");
-        process.exit(0);
+    // Handle new files
+    for (const { relativePath, content, hash } of newFiles) {
+      const resolvedPath = resolve(projectRoot, relativePath);
+      if (!resolvedPath.startsWith(resolve(projectRoot))) {
+        continue;
       }
 
-      if (action === "diff") {
-        const patch = createPatch(
-          relativePath,
-          localContent,
-          content,
-          "your version",
-          "new praxis version"
-        );
-        p.log.info(patch);
+      const fullPath = join(projectRoot, relativePath);
+      await mkdir(dirname(fullPath), { recursive: true });
+      await writeFile(fullPath, content);
+      updatedManifestFiles[relativePath] = { hash };
+      added++;
+      p.log.success(`${pc.green("added")} ${relativePath}`);
+    }
 
-        action = await p.select({
-          message: `Overwrite ${relativePath}?`,
+    // Handle changed files
+    for (const { relativePath, content, hash } of changedFiles) {
+      const resolvedPath = resolve(projectRoot, relativePath);
+      if (!resolvedPath.startsWith(resolve(projectRoot))) {
+        continue;
+      }
+
+      const fullPath = join(projectRoot, relativePath);
+
+      const locallyModified = existsSync(fullPath)
+        ? await isLocallyModified(projectRoot, relativePath, manifest)
+        : false;
+
+      if (!locallyModified) {
+        await writeFile(fullPath, content);
+        updatedManifestFiles[relativePath] = { hash };
+        updated++;
+        p.log.success(`${pc.yellow("updated")} ${relativePath}`);
+      } else {
+        const localContent = await readFile(fullPath, "utf-8");
+        let action = await p.select({
+          message: `${relativePath} has local changes and a new Praxis version. What would you like to do?`,
           options: [
-            {
-              value: "overwrite",
-              label: "Overwrite with new Praxis version",
-            },
+            { value: "overwrite", label: "Overwrite with new Praxis version" },
             { value: "skip", label: "Keep your version" },
+            { value: "diff", label: "Show diff, then decide" },
           ],
         });
 
@@ -166,13 +167,81 @@ export async function update() {
           p.cancel("Cancelled.");
           process.exit(0);
         }
+
+        if (action === "diff") {
+          const patch = createPatch(
+            relativePath,
+            localContent,
+            content,
+            "your version",
+            "new praxis version"
+          );
+          p.log.info(patch);
+
+          action = await p.select({
+            message: `Overwrite ${relativePath}?`,
+            options: [
+              {
+                value: "overwrite",
+                label: "Overwrite with new Praxis version",
+              },
+              { value: "skip", label: "Keep your version" },
+            ],
+          });
+
+          if (p.isCancel(action)) {
+            p.cancel("Cancelled.");
+            process.exit(0);
+          }
+        }
+
+        if (action === "overwrite") {
+          await writeFile(fullPath, content);
+          updatedManifestFiles[relativePath] = { hash };
+          updated++;
+          p.log.success(`${pc.yellow("updated")} ${relativePath}`);
+        } else {
+          skipped++;
+          p.log.warn(`${pc.dim("skipped")} ${relativePath}`);
+        }
+      }
+    }
+
+    // Handle removed files
+    for (const relativePath of removedFiles) {
+      const fullPath = join(projectRoot, relativePath);
+
+      const resolvedPath = resolve(projectRoot, relativePath);
+      if (!resolvedPath.startsWith(resolve(projectRoot))) {
+        continue;
       }
 
-      if (action === "overwrite") {
-        await writeFile(fullPath, content);
-        updatedManifestFiles[relativePath] = { hash };
-        updated++;
-        p.log.success(`${pc.yellow("updated")} ${relativePath}`);
+      if (!existsSync(fullPath)) {
+        delete updatedManifestFiles[relativePath];
+        removed++;
+        continue;
+      }
+
+      const locallyModified = await isLocallyModified(projectRoot, relativePath, manifest);
+
+      const warning = locallyModified
+        ? ` ${pc.yellow("(locally modified)")}`
+        : "";
+
+      const shouldRemove = await p.confirm({
+        message: `${relativePath} was removed from Praxis.${warning} Delete it?`,
+      });
+
+      if (p.isCancel(shouldRemove)) {
+        p.cancel("Cancelled.");
+        process.exit(0);
+      }
+
+      if (shouldRemove) {
+        await rm(fullPath);
+        delete updatedManifestFiles[relativePath];
+        removed++;
+        p.log.success(`${pc.red("removed")} ${relativePath}`);
       } else {
         skipped++;
         p.log.warn(`${pc.dim("skipped")} ${relativePath}`);
@@ -180,58 +249,42 @@ export async function update() {
     }
   }
 
-  // Handle removed files
-  for (const relativePath of removedFiles) {
-    const fullPath = join(projectRoot, relativePath);
-
-    const resolvedPath = resolve(projectRoot, relativePath);
-    if (!resolvedPath.startsWith(resolve(projectRoot))) {
-      continue;
-    }
-
-    if (!existsSync(fullPath)) {
-      delete updatedManifestFiles[relativePath];
-      removed++;
-      continue;
-    }
-
-    const locallyModified = await isLocallyModified(projectRoot, relativePath, manifest);
-
-    const warning = locallyModified
-      ? ` ${pc.yellow("(locally modified)")}`
-      : "";
-
-    const shouldRemove = await p.confirm({
-      message: `${relativePath} was removed from Praxis.${warning} Delete it?`,
-    });
-
-    if (p.isCancel(shouldRemove)) {
-      p.cancel("Cancelled.");
-      process.exit(0);
-    }
-
-    if (shouldRemove) {
-      await rm(fullPath);
-      delete updatedManifestFiles[relativePath];
-      removed++;
-      p.log.success(`${pc.red("removed")} ${relativePath}`);
-    } else {
-      skipped++;
-      p.log.warn(`${pc.dim("skipped")} ${relativePath}`);
-    }
-  }
-
-  await writeManifest(projectRoot, {
+  let updatedManifest = {
     ...manifest,
     updatedAt: new Date().toISOString(),
     files: updatedManifestFiles,
-  });
+  };
+
+  const toolsToRefresh = [
+    ...new Set([
+      ...(updatedManifest.tools || []),
+      ...optionToolIds.filter((id) => ["cursor", "claude"].includes(id)),
+    ]),
+  ];
+
+  if (toolsToRefresh.length > 0) {
+    await populateToolDirs(
+      projectRoot,
+      toolsToRefresh,
+      { files: updatedManifestFiles },
+      { force: true }
+    );
+    updatedManifest = { ...updatedManifest, tools: toolsToRefresh };
+    p.log.success(
+      `Tool dirs refreshed: ${toolsToRefresh.map((t) => `.${t}/`).join(", ")}`
+    );
+  }
+
+  await writeManifest(projectRoot, updatedManifest);
 
   const parts = [];
   if (added > 0) parts.push(`${pc.green(added)} added`);
   if (updated > 0) parts.push(`${pc.yellow(updated)} updated`);
   if (removed > 0) parts.push(`${pc.red(removed)} removed`);
   if (skipped > 0) parts.push(`${pc.dim(skipped)} skipped`);
+  if (parts.length === 0 && toolsToRefresh.length > 0) {
+    parts.push("tool dirs refreshed");
+  }
 
   p.outro(`Update complete! ${parts.join(", ")}.`);
 }

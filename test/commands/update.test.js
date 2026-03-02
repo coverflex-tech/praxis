@@ -26,13 +26,15 @@ import { update } from "../../src/commands/update.js";
 
 let tmpDir;
 
-function makeManifest(files) {
-  return {
+function makeManifest(files, tools = undefined) {
+  const m = {
     version: "1.0.0",
     installedAt: "2026-01-01T00:00:00Z",
     updatedAt: "2026-01-01T00:00:00Z",
     files,
   };
+  if (tools !== undefined) m.tools = tools;
+  return m;
 }
 
 async function writeTestFile(relativePath, content) {
@@ -76,6 +78,17 @@ describe("update command", () => {
     await expect(update()).rejects.toThrow("process.exit(1)");
     expect(p.log.error).toHaveBeenCalledWith(
       expect.stringContaining("init")
+    );
+  });
+
+  it("with --opencode exits 1 and writes OpenCode message to stderr", async () => {
+    readManifest.mockResolvedValue(makeManifest({}));
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => {});
+
+    await expect(update({ opencode: true })).rejects.toThrow("process.exit(1)");
+    expect(process.exit).toHaveBeenCalledWith(1);
+    expect(stderrSpy).toHaveBeenCalledWith(
+      expect.stringContaining("OpenCode is not yet supported")
     );
   });
 
@@ -412,5 +425,45 @@ describe("update command", () => {
     );
     expect(manifest.files[".agents/a.md"].hash).toBe(hashContent("v2"));
     expect(manifest.updatedAt).not.toBe("2026-01-01T00:00:00Z");
+  });
+
+  it("refreshes tool dirs when manifest has tools and no template changes", async () => {
+    await writeTestFile(".agents/a.md", "v1");
+
+    readManifest.mockResolvedValue(
+      makeManifest(
+        { ".agents/a.md": { hash: hashContent("v1") } },
+        ["cursor"]
+      )
+    );
+    fetchTemplates.mockResolvedValue(new Map([[".agents/a.md", "v1"]]));
+
+    await update();
+
+    expect(await readFile(join(tmpDir, ".cursor/a.md"), "utf-8")).toBe("v1");
+    expect(p.log.success).toHaveBeenCalledWith(
+      expect.stringContaining("Tool dirs refreshed")
+    );
+    const manifest = JSON.parse(
+      await readFile(join(tmpDir, ".praxis-manifest.json"), "utf-8")
+    );
+    expect(manifest.tools).toEqual(["cursor"]);
+  });
+
+  it("adds tool dir and manifest.tools when update is called with --cursor", async () => {
+    await writeTestFile(".agents/a.md", "v1");
+
+    readManifest.mockResolvedValue(
+      makeManifest({ ".agents/a.md": { hash: hashContent("v1") } })
+    );
+    fetchTemplates.mockResolvedValue(new Map([[".agents/a.md", "v1"]]));
+
+    await update({ cursor: true });
+
+    expect(await readFile(join(tmpDir, ".cursor/a.md"), "utf-8")).toBe("v1");
+    const manifest = JSON.parse(
+      await readFile(join(tmpDir, ".praxis-manifest.json"), "utf-8")
+    );
+    expect(manifest.tools).toEqual(["cursor"]);
   });
 });

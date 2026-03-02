@@ -16,17 +16,25 @@ program
 program
   .command("init")
   .description("Initialize Praxis in the current project")
-  .action(async () => {
+  .option("--cursor", "Add Cursor tool support (.cursor/)")
+  .option("--claude", "Add Claude tool support (.claude/)")
+  .option("--opencode", "Add OpenCode support (not yet supported)")
+  .option("--force", "Overwrite existing tool dirs if present")
+  .action(async (opts) => {
     const { init } = await import("../src/commands/init.js");
-    await init();
+    await init(opts);
   });
 
 program
   .command("update")
   .description("Update Praxis files to the latest version")
-  .action(async () => {
+  .option("--cursor", "Add or refresh Cursor tool support (.cursor/)")
+  .option("--claude", "Add or refresh Claude tool support (.claude/)")
+  .option("--opencode", "Add OpenCode support (not yet supported)")
+  .option("--force", "Overwrite existing tool dirs if present")
+  .action(async (opts) => {
     const { update } = await import("../src/commands/update.js");
-    await update();
+    await update(opts);
   });
 
 program

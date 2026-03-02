@@ -46,24 +46,49 @@ brainstorming → planning → implementing → reviewing → retrospective
 The recommended way to install Praxis is via the CLI (requires Node.js 18+):
 
 ```bash
- npx github:coverflex-tech/praxis init
+npx github:coverflex-tech/praxis init
 ```
 
 This creates the `.agents/` directory with all Praxis skills and agents, sets up `.ai-workflow/` directories, and writes a `.praxis-manifest.json` file to track installed files. Commit `.praxis-manifest.json` to version control so the CLI can detect changes on future updates.
 
+#### Tool-specific install (Cursor, Claude)
+
+To have Praxis work natively in a specific AI tool, pass optional flags to `init` (or `update`). Each flag creates or refreshes that tool’s directory (e.g. `.cursor/`, `.claude/`) from `.agents/` so the tool sees the same layout with no manual steps.
+
+```bash
+npx github:coverflex-tech/praxis init -- --cursor --claude
+```
+
+When using `npx`, put the tool flags **after** `--` so they are passed to the script. Supported flags:
+
+- `--cursor` — Add or refresh Cursor support (`.cursor/`)
+- `--claude` — Add or refresh Claude support (`.claude/`)
+- `--opencode` — Not yet supported; the CLI will exit with a clear message and link to this repo for status.
+- `--force` — Overwrite existing tool dirs if they already have content (otherwise the command fails and tells you to run `update` or remove the dir first).
+
+With no tool flags, `init` and `update` behave as before (only `.agents/` and `.ai-workflow/` are managed).
+
 To update to the latest version:
 
 ```bash
- npx github:coverflex-tech/praxis update
+npx github:coverflex-tech/praxis update
 ```
 
-The update command fetches the latest files from the Praxis repo's main branch, applies changes, and prompts you before overwriting any files you've locally modified.
+The update command fetches the latest files from the Praxis repo's main branch, applies changes, and prompts you before overwriting any files you've locally modified. If your manifest lists tool dirs (from a previous `init --cursor` or `init --claude`), `update` also refreshes those dirs from `.agents/`. You can pass `--cursor` or `--claude` to `update` to add a new tool to an already-initialized project.
 
 To check the status of managed files:
 
 ```bash
- npx github:coverflex-tech/praxis status
+npx github:coverflex-tech/praxis status
 ```
+
+#### Exit codes and errors
+
+- **0** — Success.
+- **1** — Runtime error (e.g. not initialized, permission or disk failure, tool dir already present without `--force`). Error message is written to stderr with an actionable suggestion.
+- **2** — Usage error (e.g. invalid flag). Message on stderr.
+
+Scripts can rely on the exit code and stderr for automation.
 
 #### Manual installation
 
@@ -74,6 +99,12 @@ cp -r path/to/praxis/.agents your-project/.agents
 ```
 
 Note that manual copies won't receive automatic updates.
+
+#### Troubleshooting
+
+- **"Run praxis init first"** — You're in a project that has no `.praxis-manifest.json`. Run `npx github:coverflex-tech/praxis init` (optionally with `-- --cursor` or `-- --claude`) in the project root.
+- **"Tool dir already present"** — The target directory (e.g. `.cursor/`) already has Praxis content. Use `praxis update` to refresh it, or remove the directory and run `init` again. To overwrite in place, use `--force`.
+- **"OpenCode is not yet supported"** — The `--opencode` flag is reserved for a future release. Use `--cursor` and/or `--claude` for now.
 
 ### Usage
 

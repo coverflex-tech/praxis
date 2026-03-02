@@ -255,4 +255,61 @@ describe("init", () => {
       "existing-tag"
     );
   });
+
+  it("with --cursor creates .cursor/ mirroring .agents/", async () => {
+    await init({ cursor: true });
+
+    expect(await readFile(join(tmpDir, ".cursor/test.md"), "utf-8")).toBe(
+      "# Test"
+    );
+    expect(
+      await readFile(join(tmpDir, ".cursor/sub/nested.md"), "utf-8")
+    ).toBe("# Nested");
+
+    const manifest = JSON.parse(
+      await readFile(join(tmpDir, ".praxis-manifest.json"), "utf-8")
+    );
+    expect(manifest.tools).toEqual(["cursor"]);
+  });
+
+  it("with --claude creates .claude/ mirroring .agents/", async () => {
+    await init({ claude: true });
+
+    expect(await readFile(join(tmpDir, ".claude/test.md"), "utf-8")).toBe(
+      "# Test"
+    );
+    const manifest = JSON.parse(
+      await readFile(join(tmpDir, ".praxis-manifest.json"), "utf-8")
+    );
+    expect(manifest.tools).toEqual(["claude"]);
+  });
+
+  it("with no tool flags does not create .cursor or .claude", async () => {
+    await init();
+
+    expect(existsSync(join(tmpDir, ".cursor"))).toBe(false);
+    expect(existsSync(join(tmpDir, ".claude"))).toBe(false);
+    const manifest = JSON.parse(
+      await readFile(join(tmpDir, ".praxis-manifest.json"), "utf-8")
+    );
+    expect(manifest.tools).toBeUndefined();
+  });
+
+  it("with --opencode exits 1 and writes OpenCode message to stderr", async () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => {});
+
+    await expect(init({ opencode: true })).rejects.toThrow("process.exit(1)");
+    expect(process.exit).toHaveBeenCalledWith(1);
+    expect(stderrSpy).toHaveBeenCalledWith(
+      expect.stringContaining("OpenCode is not yet supported")
+    );
+  });
+
+  it("passes tool flags and --force to update when already initialized", async () => {
+    await init({ cursor: true });
+    await init({ cursor: true, force: true });
+    expect(update).toHaveBeenLastCalledWith(
+      expect.objectContaining({ cursor: true, force: true })
+    );
+  });
 });
