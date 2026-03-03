@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 const MANIFEST_FILE = ".praxis-manifest.json";
@@ -16,15 +16,22 @@ export async function hashFile(filePath) {
 export async function readManifest(projectRoot) {
   try {
     const raw = await readFile(join(projectRoot, MANIFEST_FILE), "utf-8");
-    return JSON.parse(raw);
-  } catch {
-    return null;
+    const manifest = JSON.parse(raw);
+    if (!manifest.enabledTools) {
+      manifest.enabledTools = [];
+    }
+    return manifest;
+  } catch (err) {
+    if (err.code === "ENOENT") return null;
+    throw err;
   }
 }
 
 export async function writeManifest(projectRoot, manifest) {
   const filePath = join(projectRoot, MANIFEST_FILE);
-  await writeFile(filePath, JSON.stringify(manifest, null, 2) + "\n");
+  const tmpPath = filePath + ".tmp." + randomUUID();
+  await writeFile(tmpPath, JSON.stringify(manifest, null, 2) + "\n");
+  await rename(tmpPath, filePath);
 }
 
 export async function isLocallyModified(projectRoot, relativePath, manifest) {

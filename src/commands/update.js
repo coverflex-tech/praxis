@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import * as p from "@clack/prompts";
 import { createPatch } from "diff";
 import pc from "picocolors";
@@ -11,9 +11,13 @@ import {
   readManifest,
   writeManifest,
 } from "../manifest.js";
+import { getComponentForFile, getSelectedComponents } from "../components.js";
+import { installFile, isSafePath } from "../files.js";
+import { regenerateToolConfigs } from "../adapters.js";
 
 export async function update() {
   const projectRoot = process.cwd();
+  const resolvedRoot = resolve(projectRoot);
 
   p.intro(pc.bold("Praxis — Update"));
 
@@ -44,14 +48,45 @@ export async function update() {
   const changedFiles = [];
   const unchangedFiles = [];
 
+  const currentSelection = getSelectedComponents(manifest, templates);
+  const selectedSkillNames = new Set(currentSelection.skills);
+  const selectedReviewerNames = new Set(currentSelection.reviewers);
+
+  // Track new upstream optional components the user hasn't opted into
+  const newUnselectedComponents = new Set();
+
   // Categorize files
   for (const [relativePath, content] of templates) {
     const newHash = hashContent(content);
     const entry = manifest.files[relativePath];
 
     if (!entry) {
+      // New upstream file — check if it belongs to an unselected optional component
+      const component = getComponentForFile(relativePath);
+      if (component) {
+        const isSelected =
+          component.type === "skill"
+            ? selectedSkillNames.has(component.name)
+            : selectedReviewerNames.has(component.name);
+
+        if (!isSelected) {
+          // Don't auto-install — just record that a new optional component exists
+          newUnselectedComponents.add(component.name);
+          continue;
+        }
+      }
+
       newFiles.push({ relativePath, content, hash: newHash });
     } else if (entry.hash !== newHash) {
+      // Skip changed files for deselected optional components
+      const component = getComponentForFile(relativePath);
+      if (component) {
+        const isSelected =
+          component.type === "skill"
+            ? selectedSkillNames.has(component.name)
+            : selectedReviewerNames.has(component.name);
+        if (!isSelected) continue;
+      }
       changedFiles.push({ relativePath, content, hash: newHash });
     } else {
       unchangedFiles.push(relativePath);
@@ -69,6 +104,11 @@ export async function update() {
     changedFiles.length === 0 &&
     removedFiles.length === 0
   ) {
+    if (newUnselectedComponents.size > 0) {
+      p.log.info(
+        `${newUnselectedComponents.size} new optional component(s) available. Run \`praxis components\` to review.`
+      );
+    }
     p.outro("Everything is up to date!");
     return;
   }
@@ -91,30 +131,37 @@ export async function update() {
   let updated = 0;
   let removed = 0;
   let skipped = 0;
+  let manifestDirty = false; // set when manifest entries change without affecting counters
 
   // Handle new files
-  for (const { relativePath, content, hash } of newFiles) {
-    const resolvedPath = resolve(projectRoot, relativePath);
-    if (!resolvedPath.startsWith(resolve(projectRoot))) {
+  for (const { relativePath, content } of newFiles) {
+    const fullPath = resolve(projectRoot, relativePath);
+    if (!isSafePath(resolvedRoot, fullPath)) {
       continue;
     }
 
-    const fullPath = join(projectRoot, relativePath);
     await mkdir(dirname(fullPath), { recursive: true });
-    await writeFile(fullPath, content);
+    const { status, hash } = await installFile(fullPath, relativePath, content);
+    if (status === "cancelled") {
+      p.cancel("Cancelled.");
+      process.exit(0);
+    }
     updatedManifestFiles[relativePath] = { hash };
-    added++;
-    p.log.success(`${pc.green("added")} ${relativePath}`);
+    if (status === "written") {
+      added++;
+      p.log.success(`${pc.green("added")} ${relativePath}`);
+    } else if (status === "skipped") {
+      skipped++;
+      p.log.warn(`${pc.dim("skipped")} ${relativePath}`);
+    }
   }
 
   // Handle changed files
   for (const { relativePath, content, hash } of changedFiles) {
-    const resolvedPath = resolve(projectRoot, relativePath);
-    if (!resolvedPath.startsWith(resolve(projectRoot))) {
+    const fullPath = resolve(projectRoot, relativePath);
+    if (!isSafePath(resolvedRoot, fullPath)) {
       continue;
     }
-
-    const fullPath = join(projectRoot, relativePath);
 
     const locallyModified = existsSync(fullPath)
       ? await isLocallyModified(projectRoot, relativePath, manifest)
@@ -182,10 +229,23 @@ export async function update() {
 
   // Handle removed files
   for (const relativePath of removedFiles) {
-    const fullPath = join(projectRoot, relativePath);
+    // Silently drop manifest entries for deselected optional components —
+    // they were already removed (or never installed) by `praxis components`.
+    const component = getComponentForFile(relativePath);
+    if (component) {
+      const isSelected =
+        component.type === "skill"
+          ? selectedSkillNames.has(component.name)
+          : selectedReviewerNames.has(component.name);
+      if (!isSelected) {
+        delete updatedManifestFiles[relativePath];
+        manifestDirty = true;
+        continue;
+      }
+    }
 
-    const resolvedPath = resolve(projectRoot, relativePath);
-    if (!resolvedPath.startsWith(resolve(projectRoot))) {
+    const fullPath = resolve(projectRoot, relativePath);
+    if (!isSafePath(resolvedRoot, fullPath)) {
       continue;
     }
 
@@ -221,17 +281,46 @@ export async function update() {
     }
   }
 
-  await writeManifest(projectRoot, {
+  // Write manifest whenever files changed, or when new upstream files existed (even if skipped —
+  // their current hashes need recording), or to migrate manifests that predate selectedComponents,
+  // or when deselected-component entries were silently cleaned from the manifest.
+  const needsWrite =
+    added > 0 || updated > 0 || removed > 0 || newFiles.length > 0 || manifestDirty || !manifest.selectedComponents;
+  const updatedManifest = {
     ...manifest,
     updatedAt: new Date().toISOString(),
+    selectedComponents: currentSelection,
     files: updatedManifestFiles,
-  });
+  };
+  if (needsWrite) {
+    await writeManifest(projectRoot, updatedManifest);
+  }
+
+  // Regenerate tool configs if any tools are enabled and files changed
+  if (needsWrite) {
+    try {
+      const regenerated = await regenerateToolConfigs(projectRoot, updatedManifest);
+      if (regenerated.length > 0) {
+        p.log.info(
+          `Updated MCP config for ${regenerated.join(", ")}`
+        );
+      }
+    } catch (e) {
+      p.log.warn(`Could not regenerate tool configs: ${e.message}`);
+    }
+  }
 
   const parts = [];
   if (added > 0) parts.push(`${pc.green(added)} added`);
   if (updated > 0) parts.push(`${pc.yellow(updated)} updated`);
   if (removed > 0) parts.push(`${pc.red(removed)} removed`);
   if (skipped > 0) parts.push(`${pc.dim(skipped)} skipped`);
+
+  if (newUnselectedComponents.size > 0) {
+    p.log.info(
+      `${newUnselectedComponents.size} new optional component(s) available. Run \`praxis components\` to review.`
+    );
+  }
 
   p.outro(`Update complete! ${parts.join(", ")}.`);
 }

@@ -30,11 +30,49 @@ program
   });
 
 program
+  .command("components")
+  .description("Change which optional components are installed")
+  .action(async () => {
+    const { components } = await import("../src/commands/components.js");
+    await components();
+  });
+
+program
   .command("status")
   .description("Show the status of managed Praxis files")
   .action(async () => {
     const { status } = await import("../src/commands/status.js");
     await status();
+  });
+
+const tool = program
+  .command("tool")
+  .description("Manage tool-specific configuration (Claude Code, Cursor, Opencode)");
+
+tool
+  .command("add")
+  .description("Enable tool adapter(s) and generate their config files")
+  .argument("[names...]", "tool names (e.g., claude-code cursor)")
+  .action(async (names) => {
+    const { toolAdd } = await import("../src/commands/tool.js");
+    await toolAdd(names);
+  });
+
+tool
+  .command("remove")
+  .description("Remove tool adapter(s) and their config files")
+  .argument("<names...>", "tool names to remove")
+  .action(async (names) => {
+    const { toolRemove } = await import("../src/commands/tool.js");
+    await toolRemove(names);
+  });
+
+tool
+  .command("list")
+  .description("List all available tool adapters and their status")
+  .action(async () => {
+    const { toolList } = await import("../src/commands/tool.js");
+    await toolList();
   });
 
 program.parseAsync().catch((err) => {

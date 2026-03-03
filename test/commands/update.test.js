@@ -13,6 +13,13 @@ vi.mock("../../src/manifest.js", async (importOriginal) => {
     readManifest: vi.fn(),
   };
 });
+vi.mock("../../src/adapters.js", async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    regenerateToolConfigs: vi.fn(actual.regenerateToolConfigs),
+  };
+});
 
 import * as p from "@clack/prompts";
 import { fetchTemplates } from "../../src/templates.js";
@@ -22,6 +29,7 @@ import {
   writeManifest,
   isLocallyModified,
 } from "../../src/manifest.js";
+import { regenerateToolConfigs } from "../../src/adapters.js";
 import { update } from "../../src/commands/update.js";
 
 let tmpDir;
@@ -124,6 +132,102 @@ describe("update command", () => {
     expect(p.log.success).toHaveBeenCalledWith(
       expect.stringContaining("added")
     );
+  });
+
+  it("skips new file when it already exists on disk and user chooses skip", async () => {
+    // File exists locally but is not yet tracked in the manifest
+    await writeTestFile(".agents/new.md", "local version");
+
+    readManifest.mockResolvedValue(makeManifest({}));
+    fetchTemplates.mockResolvedValue(
+      new Map([[".agents/new.md", "upstream content"]])
+    );
+    p.select.mockResolvedValue("skip");
+
+    await update();
+
+    const content = await readFile(join(tmpDir, ".agents/new.md"), "utf-8");
+    expect(content).toBe("local version");
+    expect(p.log.warn).toHaveBeenCalledWith(expect.stringContaining("skipped"));
+  });
+
+  it("cancels when user cancels conflict prompt for a new file", async () => {
+    await writeTestFile(".agents/new.md", "local version");
+
+    readManifest.mockResolvedValue(makeManifest({}));
+    fetchTemplates.mockResolvedValue(
+      new Map([[".agents/new.md", "upstream content"]])
+    );
+    const cancelSymbol = Symbol("cancel");
+    p.select.mockResolvedValue(cancelSymbol);
+    p.isCancel = vi.fn((v) => typeof v === "symbol");
+
+    await expect(update()).rejects.toThrow("process.exit(0)");
+    expect(p.cancel).toHaveBeenCalled();
+  });
+
+  it("does not update changed file when it belongs to a deselected skill component", async () => {
+    await writeTestFile(".agents/skills/agent-browser/SKILL.md", "old");
+
+    readManifest.mockResolvedValue({
+      ...makeManifest({
+        ".agents/skills/agent-browser/SKILL.md": { hash: hashContent("old") },
+      }),
+      selectedComponents: { skills: [], reviewers: [] },
+    });
+    fetchTemplates.mockResolvedValue(
+      new Map([[".agents/skills/agent-browser/SKILL.md", "updated"]])
+    );
+
+    await update();
+
+    const content = await readFile(
+      join(tmpDir, ".agents/skills/agent-browser/SKILL.md"),
+      "utf-8"
+    );
+    expect(content).toBe("old");
+    expect(p.log.success).not.toHaveBeenCalledWith(expect.stringContaining("updated"));
+  });
+
+  it("does not update changed file when it belongs to a deselected reviewer component", async () => {
+    await writeTestFile(".agents/agents/reviewers/security.md", "old review");
+
+    readManifest.mockResolvedValue({
+      ...makeManifest({
+        ".agents/agents/reviewers/security.md": { hash: hashContent("old review") },
+      }),
+      selectedComponents: { skills: [], reviewers: [] },
+    });
+    fetchTemplates.mockResolvedValue(
+      new Map([[".agents/agents/reviewers/security.md", "updated review"]])
+    );
+
+    await update();
+
+    const content = await readFile(
+      join(tmpDir, ".agents/agents/reviewers/security.md"),
+      "utf-8"
+    );
+    expect(content).toBe("old review");
+    expect(p.log.success).not.toHaveBeenCalledWith(expect.stringContaining("updated"));
+  });
+
+  it("silently tracks a new file when it already exists on disk with matching content", async () => {
+    const content = "upstream content";
+    await writeTestFile(".agents/new.md", content);
+
+    readManifest.mockResolvedValue(makeManifest({}));
+    fetchTemplates.mockResolvedValue(new Map([[".agents/new.md", content]]));
+
+    await update();
+
+    // installFile returns "matched" — no added/skipped logged, but manifest is updated
+    expect(p.log.success).not.toHaveBeenCalledWith(expect.stringContaining("added"));
+    expect(p.log.warn).not.toHaveBeenCalled();
+    const manifest = JSON.parse(
+      await readFile(join(tmpDir, ".praxis-manifest.json"), "utf-8")
+    );
+    expect(manifest.files[".agents/new.md"]).toBeTruthy();
   });
 
   it("updates changed files that are not locally modified", async () => {
@@ -412,5 +516,311 @@ describe("update command", () => {
     );
     expect(manifest.files[".agents/a.md"].hash).toBe(hashContent("v2"));
     expect(manifest.updatedAt).not.toBe("2026-01-01T00:00:00Z");
+  });
+
+  it("does not install new optional component files that are not selected", async () => {
+    readManifest.mockResolvedValue({
+      ...makeManifest({ ".agents/conventions.md": { hash: hashContent("core") } }),
+      selectedComponents: { skills: [], reviewers: [] },
+    });
+    await writeTestFile(".agents/conventions.md", "core");
+
+    // Upstream now has a new optional skill that user hasn't selected
+    fetchTemplates.mockResolvedValue(
+      new Map([
+        [".agents/conventions.md", "core"],
+        [".agents/skills/agent-browser/SKILL.md", '---\ndescription: "Browser"\n---'],
+      ])
+    );
+
+    await update();
+
+    expect(existsSync(join(tmpDir, ".agents/skills/agent-browser/SKILL.md"))).toBe(false);
+  });
+
+  it("logs a nudge when new optional components are available but not selected", async () => {
+    readManifest.mockResolvedValue({
+      ...makeManifest({ ".agents/conventions.md": { hash: hashContent("core") } }),
+      selectedComponents: { skills: [], reviewers: [] },
+    });
+    await writeTestFile(".agents/conventions.md", "core");
+
+    fetchTemplates.mockResolvedValue(
+      new Map([
+        [".agents/conventions.md", "core"],
+        [".agents/skills/agent-browser/SKILL.md", '---\ndescription: "Browser"\n---'],
+        [".agents/agents/reviewers/security.md", '---\ndescription: "Security"\n---'],
+      ])
+    );
+
+    await update();
+
+    expect(p.log.info).toHaveBeenCalledWith(
+      expect.stringContaining("new optional component(s) available")
+    );
+    expect(p.log.info).toHaveBeenCalledWith(
+      expect.stringContaining("praxis components")
+    );
+  });
+
+  it("installs new optional component files when they are selected", async () => {
+    readManifest.mockResolvedValue({
+      ...makeManifest({ ".agents/conventions.md": { hash: hashContent("core") } }),
+      selectedComponents: { skills: ["agent-browser"], reviewers: [] },
+    });
+    await writeTestFile(".agents/conventions.md", "core");
+
+    fetchTemplates.mockResolvedValue(
+      new Map([
+        [".agents/conventions.md", "core"],
+        [".agents/skills/agent-browser/SKILL.md", '---\ndescription: "Browser"\n---'],
+      ])
+    );
+
+    await update();
+
+    expect(existsSync(join(tmpDir, ".agents/skills/agent-browser/SKILL.md"))).toBe(true);
+  });
+
+  it("logs a nudge after update when there are changes and new unselected components", async () => {
+    // Has a file that needs updating AND a new unselected optional component
+    await writeTestFile(".agents/conventions.md", "v1");
+
+    readManifest.mockResolvedValue({
+      ...makeManifest({ ".agents/conventions.md": { hash: hashContent("v1") } }),
+      selectedComponents: { skills: [], reviewers: [] },
+    });
+
+    fetchTemplates.mockResolvedValue(
+      new Map([
+        [".agents/conventions.md", "v2"],
+        [".agents/skills/agent-browser/SKILL.md", '---\ndescription: "Browser"\n---'],
+      ])
+    );
+
+    await update();
+
+    expect(p.log.info).toHaveBeenCalledWith(
+      expect.stringContaining("new optional component(s) available")
+    );
+    expect(p.outro).toHaveBeenCalledWith(expect.stringContaining("updated"));
+  });
+
+  it("updates changed file when it belongs to a selected optional component", async () => {
+    await writeTestFile(".agents/skills/agent-browser/SKILL.md", "v1");
+
+    readManifest.mockResolvedValue({
+      ...makeManifest({
+        ".agents/skills/agent-browser/SKILL.md": { hash: hashContent("v1") },
+      }),
+      selectedComponents: { skills: ["agent-browser"], reviewers: [] },
+    });
+    fetchTemplates.mockResolvedValue(
+      new Map([[".agents/skills/agent-browser/SKILL.md", "v2"]])
+    );
+
+    await update();
+
+    const content = await readFile(
+      join(tmpDir, ".agents/skills/agent-browser/SKILL.md"),
+      "utf-8"
+    );
+    expect(content).toBe("v2");
+    expect(p.log.success).toHaveBeenCalledWith(expect.stringContaining("updated"));
+  });
+
+  it("silently removes manifest entry for upstream-removed file belonging to deselected skill", async () => {
+    const SKILL_FILE = ".agents/skills/agent-browser/SKILL.md";
+    await writeTestFile(SKILL_FILE, "old");
+
+    readManifest.mockResolvedValue({
+      ...makeManifest({
+        ".agents/conventions.md": { hash: hashContent("core") },
+        [SKILL_FILE]: { hash: hashContent("old") },
+      }),
+      selectedComponents: { skills: [], reviewers: [] },
+    });
+    await writeTestFile(".agents/conventions.md", "core");
+
+    // Upstream no longer has SKILL_FILE (it was removed from Praxis)
+    fetchTemplates.mockResolvedValue(
+      new Map([[".agents/conventions.md", "core"]])
+    );
+
+    await update();
+
+    // No prompt shown — file belongs to a deselected component
+    expect(p.confirm).not.toHaveBeenCalled();
+
+    // Manifest entry silently removed
+    const raw = await readFile(join(tmpDir, ".praxis-manifest.json"), "utf-8");
+    const manifest = JSON.parse(raw);
+    expect(manifest.files[SKILL_FILE]).toBeUndefined();
+  });
+
+  it("silently removes manifest entry for upstream-removed file belonging to deselected reviewer", async () => {
+    const REVIEWER_FILE = ".agents/agents/reviewers/security.md";
+    await writeTestFile(REVIEWER_FILE, "old");
+
+    readManifest.mockResolvedValue({
+      ...makeManifest({
+        ".agents/conventions.md": { hash: hashContent("core") },
+        [REVIEWER_FILE]: { hash: hashContent("old") },
+      }),
+      selectedComponents: { skills: [], reviewers: [] },
+    });
+    await writeTestFile(".agents/conventions.md", "core");
+
+    fetchTemplates.mockResolvedValue(
+      new Map([[".agents/conventions.md", "core"]])
+    );
+
+    await update();
+
+    expect(p.confirm).not.toHaveBeenCalled();
+    const raw = await readFile(join(tmpDir, ".praxis-manifest.json"), "utf-8");
+    const manifest = JSON.parse(raw);
+    expect(manifest.files[REVIEWER_FILE]).toBeUndefined();
+  });
+
+  it("prompts when upstream removes a file belonging to a selected component", async () => {
+    const SKILL_FILE = ".agents/skills/agent-browser/SKILL.md";
+    await writeTestFile(SKILL_FILE, "old");
+
+    readManifest.mockResolvedValue({
+      ...makeManifest({
+        ".agents/conventions.md": { hash: hashContent("core") },
+        [SKILL_FILE]: { hash: hashContent("old") },
+      }),
+      selectedComponents: { skills: ["agent-browser"], reviewers: [] },
+    });
+    await writeTestFile(".agents/conventions.md", "core");
+
+    fetchTemplates.mockResolvedValue(
+      new Map([[".agents/conventions.md", "core"]])
+    );
+
+    p.confirm = vi.fn().mockResolvedValue(false); // user keeps the file
+
+    await update();
+
+    // Prompt IS shown — component is selected
+    expect(p.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining(SKILL_FILE) })
+    );
+  });
+
+  it("does not nudge when there are no new unselected optional components", async () => {
+    readManifest.mockResolvedValue({
+      ...makeManifest({ ".agents/conventions.md": { hash: hashContent("core") } }),
+      selectedComponents: { skills: ["agent-browser"], reviewers: [] },
+    });
+    await writeTestFile(".agents/conventions.md", "core");
+
+    fetchTemplates.mockResolvedValue(
+      new Map([
+        [".agents/conventions.md", "core"],
+        [".agents/skills/agent-browser/SKILL.md", '---\ndescription: "Browser"\n---'],
+      ])
+    );
+
+    await update();
+
+    const nudgeCalls = p.log.info.mock.calls.filter((args) =>
+      args[0]?.includes?.("new optional component(s)")
+    );
+    expect(nudgeCalls).toHaveLength(0);
+  });
+
+  it("regenerates tool configs when mcp.json changes and tools are enabled", async () => {
+    const oldMcp = JSON.stringify({
+      figma: { command: "npx", args: ["-y", "figma-old"], env: { KEY: "${K}" } },
+    });
+    const newMcp = JSON.stringify({
+      figma: { command: "npx", args: ["-y", "figma-new"], env: { KEY: "${K}" } },
+    });
+
+    await writeTestFile(".agents/conventions.md", "core");
+    await writeTestFile(".agents/skills/figma-to-code/SKILL.md", "---\ndescription: Figma\n---");
+    await writeTestFile(".agents/skills/figma-to-code/mcp.json", oldMcp);
+
+    readManifest.mockResolvedValue({
+      ...makeManifest({
+        ".agents/conventions.md": { hash: hashContent("core") },
+        ".agents/skills/figma-to-code/SKILL.md": { hash: hashContent("---\ndescription: Figma\n---") },
+        ".agents/skills/figma-to-code/mcp.json": { hash: hashContent(oldMcp) },
+      }),
+      selectedComponents: { skills: ["figma-to-code"], reviewers: [] },
+      enabledTools: ["cursor"],
+    });
+
+    fetchTemplates.mockResolvedValue(
+      new Map([
+        [".agents/conventions.md", "core"],
+        [".agents/skills/figma-to-code/SKILL.md", "---\ndescription: Figma\n---"],
+        [".agents/skills/figma-to-code/mcp.json", newMcp],
+      ])
+    );
+
+    await update();
+
+    // .cursor/mcp.json should have been regenerated with new config
+    expect(existsSync(join(tmpDir, ".cursor/mcp.json"))).toBe(true);
+    const cursorConfig = JSON.parse(
+      await readFile(join(tmpDir, ".cursor/mcp.json"), "utf-8")
+    );
+    expect(cursorConfig.mcpServers.figma.args).toContain("-y");
+
+    expect(p.log.info).toHaveBeenCalledWith(
+      expect.stringContaining("Updated MCP config for cursor")
+    );
+  });
+
+  it("does not regenerate tool configs when no tools are enabled", async () => {
+    await writeTestFile(".agents/conventions.md", "core");
+
+    readManifest.mockResolvedValue({
+      ...makeManifest({
+        ".agents/conventions.md": { hash: hashContent("old core") },
+      }),
+      selectedComponents: { skills: [], reviewers: [] },
+      enabledTools: [],
+    });
+
+    fetchTemplates.mockResolvedValue(
+      new Map([[".agents/conventions.md", "core"]])
+    );
+
+    await update();
+
+    const infoCalls = p.log.info.mock.calls.map((c) => c[0]);
+    expect(infoCalls.every((msg) => !msg.includes("Updated MCP config"))).toBe(true);
+  });
+
+  it("warns but continues when regenerateToolConfigs throws", async () => {
+    // File on disk matches old manifest hash (not locally modified)
+    await writeTestFile(".agents/conventions.md", "old core");
+
+    readManifest.mockResolvedValue({
+      ...makeManifest({
+        ".agents/conventions.md": { hash: hashContent("old core") },
+      }),
+      selectedComponents: { skills: [], reviewers: [] },
+      enabledTools: ["cursor"],
+    });
+
+    // Template has new content — triggers an update
+    fetchTemplates.mockResolvedValue(
+      new Map([[".agents/conventions.md", "new core"]])
+    );
+
+    regenerateToolConfigs.mockRejectedValueOnce(new Error("disk full"));
+
+    await update();
+
+    expect(p.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("Could not regenerate tool configs")
+    );
+    expect(p.outro).toHaveBeenCalled();
   });
 });
