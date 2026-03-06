@@ -1,5 +1,5 @@
 ---
-name: retrospective
+name: px-retrospect
 description: "Reviews completed work to document learnings, mistakes, and patterns for future cycles. Use after implementation is done or when reflecting on past work."
 argument-hint: "path to plan file(s), e.g. .ai-workflow/plans/20260222-offline-first-sync-phase-1.md"
 ---
@@ -38,7 +38,7 @@ The user may add context you don't have visibility into (e.g., external factors,
 
 Distill the conversation into one or more learning files and save to `.ai-workflow/learnings/`. Each file should focus on a single, specific insight — not a broad summary of the retrospective.
 
-Follow the tag and naming conventions in @.agents/conventions.md.
+Follow the tag and naming conventions in @../../conventions.md.
 
 **Good learning**: "Phoenix LiveView form validation must use `phx-debounce` to avoid excessive server round-trips on every keystroke."
 

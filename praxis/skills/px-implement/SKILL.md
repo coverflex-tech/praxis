@@ -1,5 +1,5 @@
 ---
-name: implementing
+name: px-implement
 description: "Executes an implementation plan by writing code. Use when ready to implement a plan that has been brainstormed, planned, and approved."
 argument-hint: "path to plan file, e.g. .ai-workflow/plans/20260222-offline-first-sync-phase-1.md"
 ---
@@ -52,21 +52,23 @@ After all steps are complete, go through each acceptance criterion from the plan
 
 If any criteria are not met, discuss with the user whether to address them now or defer.
 
-### 5. Run automated review
+### 5. Hand off to automated review
 
-Once implementation is complete and acceptance criteria are verified, invoke the **reviewing** skill to run all configured reviewers against the changed files.
+Once implementation is complete and acceptance criteria are verified, **do not run px-review in this thread**. The implementation thread already has a large context — running reviewers here would duplicate all file contents into sub-agents unnecessarily.
 
-Present the review findings to the user. Fix any issues the user approves.
+Instead, tell the user to run px-review in a fresh thread (or use `handoff` to start one). For example:
+
+> "Implementation is complete. To run the automated review with a clean context, start a new thread and invoke **px-review** against the changed files."
 
 ### 6. Update related documents
 
 After implementation and review are complete:
 - Update the plan's acceptance criteria checkboxes to reflect final state
-- Leave the plan's `status` as `in-progress` (the retrospective skill will set it to `done`)
+- Leave the plan's `status` as `in-progress` (the px-retrospect skill will set it to `done`)
 
 ## Git conventions
 
-Follow the Git conventions in @.agents/conventions.md.
+Follow the Git conventions in @../../conventions.md.
 
 Commits should tell a story to reviewers (AI or human). It is fine to have multiple commits per step if they make logical sense — prefer meaningful, reviewable units over one giant commit.
 
@@ -77,4 +79,6 @@ Commits should tell a story to reviewers (AI or human). It is fine to have multi
 - **Stop on ambiguity.** If a step is unclear, ask. Don't interpret creatively.
 - **Don't over-engineer.** Implement exactly what the plan says. No extra features, no "while we're here" improvements.
 - **Test as you go.** Run relevant tests after each step, not just at the end.
-- **Don't skip the review.** Always run the reviewing skill after implementation.
+- **Don't skip the review.** Always hand off to px-review after implementation.
+- **Minimize reads.** The plan's research summary already contains relevant code snippets and patterns — don't re-read files whose relevant sections are already quoted there. When you do need to read a file, read it once and make all related edits before moving on. Use targeted line ranges (from the plan's step details) instead of reading entire files.
+- **Batch related edits.** When a step requires multiple changes to the same file, make them all in sequence after a single read, then run tests once. Don't interleave reads and edits on the same file.

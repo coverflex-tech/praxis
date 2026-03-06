@@ -1,10 +1,11 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 vi.mock("@clack/prompts");
+vi.mock("../../src/templates.js");
 vi.mock("../../src/manifest.js", async (importOriginal) => {
   const actual = await importOriginal();
   return {
@@ -13,17 +14,10 @@ vi.mock("../../src/manifest.js", async (importOriginal) => {
     writeManifest: vi.fn(actual.writeManifest),
   };
 });
-vi.mock("../../src/adapters.js", async (importOriginal) => {
-  const actual = await importOriginal();
-  return {
-    ...actual,
-    getAdapter: vi.fn(actual.getAdapter),
-  };
-});
 
 import * as p from "@clack/prompts";
+import { fetchTemplates } from "../../src/templates.js";
 import { readManifest, writeManifest, hashContent } from "../../src/manifest.js";
-import { getAdapter } from "../../src/adapters.js";
 import { toolAdd, toolRemove, toolList } from "../../src/commands/tool.js";
 
 let tmpDir;
@@ -61,6 +55,8 @@ beforeEach(async () => {
   p.isCancel = vi.fn().mockReturnValue(false);
   p.multiselect = vi.fn().mockResolvedValue([]);
   p.confirm = vi.fn().mockResolvedValue(true);
+
+  fetchTemplates.mockResolvedValue(new Map());
 });
 
 afterEach(async () => {
@@ -87,11 +83,10 @@ describe("toolAdd", () => {
     );
   });
 
-  it("generates .mcp.json and CLAUDE.md symlink for claude-code", async () => {
-    // Set up a skill with mcp.json
-    await mkdir(join(tmpDir, ".agents/skills/figma-to-code"), { recursive: true });
+  it("generates .mcp.json for claude-code", async () => {
+    await mkdir(join(tmpDir, "praxis/skills/figma-to-code"), { recursive: true });
     await writeFile(
-      join(tmpDir, ".agents/skills/figma-to-code/mcp.json"),
+      join(tmpDir, "praxis/skills/figma-to-code/mcp.json"),
       JSON.stringify({
         figma: {
           command: "npx",
@@ -109,10 +104,6 @@ describe("toolAdd", () => {
 
     await toolAdd(["claude-code"]);
 
-    // CLAUDE.md should be a symlink to AGENTS.md
-    const linkTarget = await readlink(join(tmpDir, "CLAUDE.md"));
-    expect(linkTarget).toBe("AGENTS.md");
-
     // .mcp.json should contain mcpServers
     const mcpContent = JSON.parse(
       await readFile(join(tmpDir, ".mcp.json"), "utf-8")
@@ -127,25 +118,10 @@ describe("toolAdd", () => {
     expect(manifest.enabledTools).toContain("claude-code");
   });
 
-  it("warns and skips CLAUDE.md when it exists as a regular file", async () => {
-    await writeFile(join(tmpDir, "CLAUDE.md"), "# My custom Claude instructions");
-
-    readManifest.mockResolvedValue(makeManifest());
-
-    await toolAdd(["claude-code"]);
-
-    // Should still be a regular file, not overwritten
-    const content = await readFile(join(tmpDir, "CLAUDE.md"), "utf-8");
-    expect(content).toBe("# My custom Claude instructions");
-    expect(p.log.warn).toHaveBeenCalledWith(
-      expect.stringContaining("already exists and is not a symlink")
-    );
-  });
-
   it("generates .cursor/mcp.json with ${env:VAR} syntax", async () => {
-    await mkdir(join(tmpDir, ".agents/skills/figma-to-code"), { recursive: true });
+    await mkdir(join(tmpDir, "praxis/skills/figma-to-code"), { recursive: true });
     await writeFile(
-      join(tmpDir, ".agents/skills/figma-to-code/mcp.json"),
+      join(tmpDir, "praxis/skills/figma-to-code/mcp.json"),
       JSON.stringify({
         figma: {
           command: "npx",
@@ -170,9 +146,9 @@ describe("toolAdd", () => {
   });
 
   it("generates opencode.json with correct format", async () => {
-    await mkdir(join(tmpDir, ".agents/skills/figma-to-code"), { recursive: true });
+    await mkdir(join(tmpDir, "praxis/skills/figma-to-code"), { recursive: true });
     await writeFile(
-      join(tmpDir, ".agents/skills/figma-to-code/mcp.json"),
+      join(tmpDir, "praxis/skills/figma-to-code/mcp.json"),
       JSON.stringify({
         figma: {
           command: "npx",
@@ -214,6 +190,22 @@ describe("toolAdd", () => {
     );
     expect(content.provider).toEqual({ default: "anthropic" });
     expect(content.mcp).toBeTruthy();
+  });
+
+  it("does not write MCP config for amp-code (no-op)", async () => {
+    readManifest.mockResolvedValue(makeManifest());
+
+    await toolAdd(["amp-code"]);
+
+    const manifest = JSON.parse(
+      await readFile(join(tmpDir, ".praxis-manifest.json"), "utf-8")
+    );
+    expect(manifest.enabledTools).toContain("amp-code");
+
+    // No MCP config file written
+    expect(p.outro).toHaveBeenCalledWith(
+      expect.stringContaining("0 file(s) written")
+    );
   });
 
   it("shows interactive multi-select when no names given", async () => {
@@ -266,19 +258,7 @@ describe("toolAdd", () => {
     );
   });
 
-  it("overwrites existing CLAUDE.md symlink", async () => {
-    const { symlink } = await import("node:fs/promises");
-    await symlink("OLD_TARGET.md", join(tmpDir, "CLAUDE.md"));
-
-    readManifest.mockResolvedValue(makeManifest());
-
-    await toolAdd(["claude-code"]);
-
-    const linkTarget = await readlink(join(tmpDir, "CLAUDE.md"));
-    expect(linkTarget).toBe("AGENTS.md");
-  });
-
-  it("overwrites existing opencode.json with invalid JSON via writeAdapterFiles", async () => {
+  it("overwrites existing opencode.json with invalid JSON", async () => {
     await writeFile(join(tmpDir, "opencode.json"), "not json {");
 
     readManifest.mockResolvedValue(makeManifest());
@@ -291,15 +271,28 @@ describe("toolAdd", () => {
     expect(content.mcp).toBeTruthy();
   });
 
-  it("merges mcp into existing opencode.json via writeAdapterFiles", async () => {
+  it("shows multi-select with already enabled tools as initial values", async () => {
+    readManifest.mockResolvedValue(makeManifest({ enabledTools: ["cursor"] }));
+    p.multiselect = vi.fn().mockResolvedValue(["cursor"]);
+
+    await toolAdd([]);
+
+    expect(p.multiselect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialValues: ["cursor"],
+      })
+    );
+  });
+
+  it("merges mcp into existing opencode.json via writeMcpConfigFile", async () => {
     await writeFile(
       join(tmpDir, "opencode.json"),
       JSON.stringify({ provider: { default: "anthropic" } }, null, 2) + "\n"
     );
 
-    await mkdir(join(tmpDir, ".agents/skills/figma-to-code"), { recursive: true });
+    await mkdir(join(tmpDir, "praxis/skills/figma-to-code"), { recursive: true });
     await writeFile(
-      join(tmpDir, ".agents/skills/figma-to-code/mcp.json"),
+      join(tmpDir, "praxis/skills/figma-to-code/mcp.json"),
       JSON.stringify({ figma: { command: "npx", args: [], env: {} } })
     );
 
@@ -316,6 +309,94 @@ describe("toolAdd", () => {
     );
     expect(content.provider).toEqual({ default: "anthropic" });
     expect(content.mcp.figma).toBeTruthy();
+  });
+
+  it("throws when fetchTemplates fails", async () => {
+    readManifest.mockResolvedValue(makeManifest());
+    fetchTemplates.mockRejectedValue(new Error("network error"));
+
+    await expect(toolAdd(["cursor"])).rejects.toThrow("process.exit(1)");
+    expect(p.log.error).toHaveBeenCalledWith("network error");
+  });
+
+  it("installs manifest files to new tool destinations", async () => {
+    const fileContent = "# Skill File";
+    const fileHash = hashContent(fileContent);
+
+    readManifest.mockResolvedValue(
+      makeManifest({
+        files: {
+          "praxis/skills/my-skill/SKILL.md": { hash: fileHash },
+        },
+      })
+    );
+
+    fetchTemplates.mockResolvedValue(
+      new Map([["praxis/skills/my-skill/SKILL.md", fileContent]])
+    );
+
+    await toolAdd(["claude-code"]);
+
+    const installed = await readFile(
+      join(tmpDir, ".claude/skills/my-skill/SKILL.md"),
+      "utf-8"
+    );
+    expect(installed).toBe(fileContent);
+
+    const manifest = JSON.parse(
+      await readFile(join(tmpDir, ".praxis-manifest.json"), "utf-8")
+    );
+    const entry = manifest.files["praxis/skills/my-skill/SKILL.md"];
+    expect(entry.destinations["claude-code"]).toBe(
+      ".claude/skills/my-skill/SKILL.md"
+    );
+  });
+
+  it("re-installs files when re-adding an already enabled tool", async () => {
+    const fileContent = "# Re-install";
+    const fileHash = hashContent(fileContent);
+
+    readManifest.mockResolvedValue(
+      makeManifest({
+        enabledTools: ["cursor"],
+        files: {
+          "praxis/skills/my-skill/SKILL.md": {
+            hash: fileHash,
+            destinations: { cursor: ".cursor/skills/my-skill/SKILL.md" },
+          },
+        },
+      })
+    );
+
+    fetchTemplates.mockResolvedValue(
+      new Map([["praxis/skills/my-skill/SKILL.md", fileContent]])
+    );
+
+    await toolAdd(["cursor"]);
+
+    const installed = await readFile(
+      join(tmpDir, ".cursor/skills/my-skill/SKILL.md"),
+      "utf-8"
+    );
+    expect(installed).toBe(fileContent);
+  });
+
+  it("skips manifest files not found in templates", async () => {
+    readManifest.mockResolvedValue(
+      makeManifest({
+        files: {
+          "praxis/skills/gone/SKILL.md": { hash: "abc" },
+        },
+      })
+    );
+
+    fetchTemplates.mockResolvedValue(new Map());
+
+    await toolAdd(["cursor"]);
+
+    expect(
+      existsSync(join(tmpDir, ".cursor/skills/gone/SKILL.md"))
+    ).toBe(false);
   });
 });
 
@@ -425,11 +506,8 @@ describe("toolRemove", () => {
     expect(manifest.enabledTools).not.toContain("cursor");
   });
 
-  it("removes CLAUDE.md symlink and .mcp.json", async () => {
+  it("removes .mcp.json for claude-code", async () => {
     await writeFile(join(tmpDir, ".mcp.json"), "{}");
-    // Create a symlink
-    const { symlink } = await import("node:fs/promises");
-    await symlink("AGENTS.md", join(tmpDir, "CLAUDE.md"));
 
     readManifest.mockResolvedValue(
       makeManifest({ enabledTools: ["claude-code"] })
@@ -437,8 +515,262 @@ describe("toolRemove", () => {
 
     await toolRemove(["claude-code"]);
 
-    expect(existsSync(join(tmpDir, "CLAUDE.md"))).toBe(false);
     expect(existsSync(join(tmpDir, ".mcp.json"))).toBe(false);
+  });
+
+  it("handles amp-code removal gracefully (no MCP config to remove)", async () => {
+    readManifest.mockResolvedValue(
+      makeManifest({ enabledTools: ["amp-code"] })
+    );
+
+    await toolRemove(["amp-code"]);
+
+    const manifest = JSON.parse(
+      await readFile(join(tmpDir, ".praxis-manifest.json"), "utf-8")
+    );
+    expect(manifest.enabledTools).not.toContain("amp-code");
+  });
+
+  it("removes Praxis-managed files from tool directories", async () => {
+    await mkdir(join(tmpDir, ".agents"), { recursive: true });
+    await writeFile(join(tmpDir, ".agents/conventions.md"), "core content");
+
+    readManifest.mockResolvedValue(
+      makeManifest({
+        enabledTools: ["amp-code"],
+        files: {
+          "praxis/conventions.md": {
+            hash: hashContent("core content"),
+            destinations: { "amp-code": ".agents/conventions.md" },
+          },
+        },
+      })
+    );
+
+    await toolRemove(["amp-code"]);
+
+    expect(existsSync(join(tmpDir, ".agents/conventions.md"))).toBe(false);
+    // Empty dir should be cleaned up
+    expect(existsSync(join(tmpDir, ".agents"))).toBe(false);
+    expect(p.log.success).toHaveBeenCalledWith(
+      expect.stringContaining("removed")
+    );
+  });
+
+  it("skips locally modified files with warning during tool remove", async () => {
+    await mkdir(join(tmpDir, ".agents"), { recursive: true });
+    await writeFile(join(tmpDir, ".agents/conventions.md"), "locally modified");
+
+    readManifest.mockResolvedValue(
+      makeManifest({
+        enabledTools: ["amp-code"],
+        files: {
+          "praxis/conventions.md": {
+            hash: hashContent("original content"),
+            destinations: { "amp-code": ".agents/conventions.md" },
+          },
+        },
+      })
+    );
+
+    await toolRemove(["amp-code"]);
+
+    // File should be preserved
+    expect(existsSync(join(tmpDir, ".agents/conventions.md"))).toBe(true);
+    expect(p.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("locally modified")
+    );
+  });
+
+  it("updates manifest destinations when removing a tool", async () => {
+    await mkdir(join(tmpDir, ".agents"), { recursive: true });
+    await writeFile(join(tmpDir, ".agents/conventions.md"), "core");
+    await mkdir(join(tmpDir, ".cursor"), { recursive: true });
+    await writeFile(join(tmpDir, ".cursor/conventions.md"), "core");
+
+    readManifest.mockResolvedValue(
+      makeManifest({
+        enabledTools: ["amp-code", "cursor"],
+        files: {
+          "praxis/conventions.md": {
+            hash: hashContent("core"),
+            destinations: {
+              "amp-code": ".agents/conventions.md",
+              cursor: ".cursor/conventions.md",
+            },
+          },
+        },
+      })
+    );
+
+    await toolRemove(["amp-code"]);
+
+    // Only amp-code files removed
+    expect(existsSync(join(tmpDir, ".agents/conventions.md"))).toBe(false);
+    expect(existsSync(join(tmpDir, ".cursor/conventions.md"))).toBe(true);
+
+    const manifest = JSON.parse(
+      await readFile(join(tmpDir, ".praxis-manifest.json"), "utf-8")
+    );
+    // amp-code destination should be gone, cursor should remain
+    expect(manifest.files["praxis/conventions.md"].destinations["amp-code"]).toBeUndefined();
+    expect(manifest.files["praxis/conventions.md"].destinations.cursor).toBe(
+      ".cursor/conventions.md"
+    );
+  });
+
+  it("handles removal when managed files are already gone", async () => {
+    // No files on disk, but manifest tracks them
+    readManifest.mockResolvedValue(
+      makeManifest({
+        enabledTools: ["amp-code"],
+        files: {
+          "praxis/conventions.md": {
+            hash: hashContent("core"),
+            destinations: { "amp-code": ".agents/conventions.md" },
+          },
+        },
+      })
+    );
+
+    await toolRemove(["amp-code"]);
+
+    const manifest = JSON.parse(
+      await readFile(join(tmpDir, ".praxis-manifest.json"), "utf-8")
+    );
+    expect(manifest.enabledTools).not.toContain("amp-code");
+    expect(manifest.files["praxis/conventions.md"].destinations["amp-code"]).toBeUndefined();
+  });
+
+  it("blocks path traversal for tool destination paths", async () => {
+    // Create a file outside the project that should NOT be touched
+    const evilContent = "should not be deleted";
+    await mkdir(join(tmpDir, "outside"), { recursive: true });
+    await writeFile(join(tmpDir, "outside/evil.md"), evilContent);
+
+    readManifest.mockResolvedValue(
+      makeManifest({
+        enabledTools: ["amp-code"],
+        files: {
+          "praxis/conventions.md": {
+            hash: hashContent(evilContent),
+            destinations: { "amp-code": "../outside/evil.md" },
+          },
+        },
+      })
+    );
+
+    await toolRemove(["amp-code"]);
+
+    // File outside project root must not be deleted
+    expect(existsSync(join(tmpDir, "outside/evil.md"))).toBe(true);
+  });
+
+  it("cleans up multiple empty directories after removing tool destinations", async () => {
+    await mkdir(join(tmpDir, ".agents/skills/agent-browser"), { recursive: true });
+    await writeFile(join(tmpDir, ".agents/skills/agent-browser/SKILL.md"), "browser");
+    await mkdir(join(tmpDir, ".agents/agents/reviewers"), { recursive: true });
+    await writeFile(join(tmpDir, ".agents/agents/reviewers/security.md"), "security");
+
+    readManifest.mockResolvedValue(
+      makeManifest({
+        enabledTools: ["amp-code"],
+        files: {
+          "praxis/skills/agent-browser/SKILL.md": {
+            hash: hashContent("browser"),
+            destinations: { "amp-code": ".agents/skills/agent-browser/SKILL.md" },
+          },
+          "praxis/agents/reviewers/security.md": {
+            hash: hashContent("security"),
+            destinations: { "amp-code": ".agents/agents/reviewers/security.md" },
+          },
+        },
+      })
+    );
+
+    await toolRemove(["amp-code"]);
+
+    expect(existsSync(join(tmpDir, ".agents/skills/agent-browser/SKILL.md"))).toBe(false);
+    expect(existsSync(join(tmpDir, ".agents/agents/reviewers/security.md"))).toBe(false);
+    // Empty directories should be cleaned up
+    expect(existsSync(join(tmpDir, ".agents/skills/agent-browser"))).toBe(false);
+    expect(existsSync(join(tmpDir, ".agents/agents/reviewers"))).toBe(false);
+  });
+
+  it("skips manifest entries without destinations during tool remove", async () => {
+    readManifest.mockResolvedValue(
+      makeManifest({
+        enabledTools: ["amp-code"],
+        files: {
+          "praxis/conventions.md": {
+            hash: hashContent("core"),
+            // No destinations property — legacy entry
+          },
+        },
+      })
+    );
+
+    await toolRemove(["amp-code"]);
+
+    const manifest = JSON.parse(
+      await readFile(join(tmpDir, ".praxis-manifest.json"), "utf-8")
+    );
+    expect(manifest.enabledTools).not.toContain("amp-code");
+  });
+
+  it("skips manifest entries where the tool has no destination", async () => {
+    await mkdir(join(tmpDir, ".cursor"), { recursive: true });
+    await writeFile(join(tmpDir, ".cursor/conventions.md"), "core");
+
+    readManifest.mockResolvedValue(
+      makeManifest({
+        enabledTools: ["amp-code", "cursor"],
+        files: {
+          "praxis/conventions.md": {
+            hash: hashContent("core"),
+            destinations: { cursor: ".cursor/conventions.md" },
+            // No amp-code destination
+          },
+        },
+      })
+    );
+
+    await toolRemove(["amp-code"]);
+
+    // cursor destination should be untouched
+    expect(existsSync(join(tmpDir, ".cursor/conventions.md"))).toBe(true);
+  });
+
+  it("shows summary with both removed and skipped counts", async () => {
+    await mkdir(join(tmpDir, ".agents"), { recursive: true });
+    await writeFile(join(tmpDir, ".agents/clean.md"), "original");
+    await writeFile(join(tmpDir, ".agents/modified.md"), "locally changed");
+
+    readManifest.mockResolvedValue(
+      makeManifest({
+        enabledTools: ["amp-code"],
+        files: {
+          "praxis/clean.md": {
+            hash: hashContent("original"),
+            destinations: { "amp-code": ".agents/clean.md" },
+          },
+          "praxis/modified.md": {
+            hash: hashContent("original content"),
+            destinations: { "amp-code": ".agents/modified.md" },
+          },
+        },
+      })
+    );
+
+    await toolRemove(["amp-code"]);
+
+    // clean.md removed, modified.md skipped
+    expect(existsSync(join(tmpDir, ".agents/clean.md"))).toBe(false);
+    expect(existsSync(join(tmpDir, ".agents/modified.md"))).toBe(true);
+
+    const outroCall = p.outro.mock.calls[0][0];
+    expect(outroCall).toContain("removed");
+    expect(outroCall).toContain("skipped");
   });
 });
 
@@ -456,63 +788,10 @@ describe("toolList", () => {
 
     await toolList();
 
-    // Should have called p.log.message for each adapter
-    expect(p.log.message).toHaveBeenCalledTimes(3);
+    // Should have called p.log.message for each adapter (4 now)
+    expect(p.log.message).toHaveBeenCalledTimes(4);
     expect(p.outro).toHaveBeenCalledWith(
-      expect.stringContaining("3 tool adapter(s)")
+      expect.stringContaining("4 tool adapter(s)")
     );
-  });
-});
-
-describe("security guards", () => {
-  it("skips entries with path traversal in writeAdapterFiles", async () => {
-    readManifest.mockResolvedValue(makeManifest());
-
-    // Return an adapter whose transform produces a traversal path
-    getAdapter.mockReturnValueOnce({
-      displayName: "Evil",
-      files: ["../../evil.json"],
-      transform: () => [
-        { path: "../../evil.json", type: "file", content: "{}\n" },
-      ],
-    });
-
-    await toolAdd(["cursor"]);
-
-    // The traversal path should not have been written
-    expect(existsSync(join(tmpDir, "../../evil.json"))).toBe(false);
-  });
-
-  it("skips entries with path traversal in removeAdapterFiles", async () => {
-    readManifest.mockResolvedValue(
-      makeManifest({ enabledTools: ["cursor"] })
-    );
-
-    getAdapter.mockReturnValueOnce({
-      displayName: "Evil",
-      files: ["../../evil.json"],
-      transform: () => [
-        { path: "../../evil.json", type: "file", content: "{}\n" },
-      ],
-    });
-
-    await toolRemove(["cursor"]);
-
-    // Should complete without error
-    expect(p.outro).toHaveBeenCalled();
-  });
-
-  it("returns 0 when adapter is null in removeAdapterFiles", async () => {
-    readManifest.mockResolvedValue(
-      makeManifest({ enabledTools: ["cursor"] })
-    );
-
-    // Simulate a stale/unknown adapter name in manifest
-    getAdapter.mockReturnValueOnce(null);
-
-    await toolRemove(["cursor"]);
-
-    // Should complete without crashing
-    expect(p.outro).toHaveBeenCalled();
   });
 });

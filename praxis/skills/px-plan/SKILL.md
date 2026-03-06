@@ -1,6 +1,6 @@
 ---
-name: planning
-description: "Creates concrete implementation plans from brainstormed ideas. Use when ready to turn an idea into actionable steps — after brainstorming, before implementation."
+name: px-plan
+description: "Creates concrete implementation plans from brainstormed ideas. Use when ready to turn an idea into actionable steps — after px-brainstorm, before px-implement."
 argument-hint: "path to idea file(s), e.g. .ai-workflow/ideas/20260222-offline-first-sync.md"
 ---
 
@@ -10,7 +10,7 @@ Turn a brainstormed idea into one or more concrete, actionable implementation pl
 
 ## Prerequisites
 
-Every plan **must** be linked to one or more idea files from `.ai-workflow/ideas/`. If the user hasn't brainstormed yet, direct them to use the brainstorming skill first.
+Every plan **must** be linked to one or more idea files from `.ai-workflow/ideas/`. If the user hasn't brainstormed yet, direct them to use the px-brainstorm skill first.
 
 ## How a session works
 
@@ -18,7 +18,7 @@ Every plan **must** be linked to one or more idea files from `.ai-workflow/ideas
 
 If `$ARGUMENTS` is provided, treat it as the path(s) to idea file(s) and read them. Otherwise, ask the user which idea(s) they want to plan. Read the referenced idea files from `.ai-workflow/ideas/` to understand the problem, core idea, insights, and open questions.
 
-Review the idea thoroughly before proceeding. If open questions from the brainstorming phase are blockers, resolve them with the user now.
+Review the idea thoroughly before proceeding. If open questions from the px-brainstorm phase are blockers, resolve them with the user now.
 
 ### 2. Research
 
@@ -53,6 +53,11 @@ For each phase, create a plan file in `.ai-workflow/plans/` using the file forma
 - **Bad**: "Add authentication"
 - **Good**: "Add session-based authentication using Phoenix.Token. Create a login LiveView at /login that accepts email/password, validates against the users table, and sets a signed session cookie."
 
+When referencing files to modify, **include line ranges** so the implementing agent can do targeted reads instead of loading entire files. For example:
+
+- **Bad**: "Update `src/commands/update.js` to add the new handler"
+- **Good**: "Update `src/commands/update.js` lines 45-80 (the `runUpdate` function) to add the new handler after the existing validation block"
+
 Push for specificity. Ask the user clarifying questions rather than leaving things vague. A good plan should leave minimal ambiguity for the implementation phase.
 
 ### 5. Review with the user
@@ -70,11 +75,11 @@ After the user approves the plan:
 
 ### 7. Offer to commit
 
-After saving the plan and updating related documents, ask the user if they'd like to commit the changes. If they agree, stage only the relevant files and commit following the Git conventions in @.agents/conventions.md. Always let the user review before committing.
+After saving the plan and updating related documents, ask the user if they'd like to commit the changes. If they agree, stage only the relevant files and commit following the Git conventions in @../../conventions.md. Always let the user review before committing.
 
 ## File conventions
 
-Follow the tag, naming, and status conventions in @.agents/conventions.md.
+Follow the tag, naming, and status conventions in @../../conventions.md.
 
 Use the file template in `reference/template.md`.
 

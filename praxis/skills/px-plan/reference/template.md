@@ -26,9 +26,9 @@ Key findings from the research phase that inform this plan. Include relevant exi
 
 ## Steps
 
-Ordered list of concrete steps to implement this plan.
+Ordered list of concrete steps to implement this plan. For each step, be specific about files, modules, components, APIs, data structures, or behaviors. **Include file line ranges** (e.g., `src/auth.js` lines 30-55) so the implementing agent can do targeted reads.
 
-1. **Step title** — Detailed description of what to do. Be specific about files, modules, components, APIs, data structures, or behaviors.
+1. **Step title** — Detailed description of what to do. Reference specific files and line ranges where changes are needed.
 2. **Step title** — Another step.
 3. ...
 

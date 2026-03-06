@@ -1,5 +1,5 @@
 ---
-name: reviewing
+name: px-review
 description: "Runs automated code reviews using configurable reviewer agents. Use during or after implementation to check code quality, security, and best practices."
 argument-hint: "file paths or directories to review, or 'staged' for staged git changes"
 ---
@@ -19,17 +19,21 @@ If `$ARGUMENTS` is provided, use it as the scope:
 
 If no arguments, ask the user what to review.
 
-### 2. Discover reviewers
+### 2. Discover and select reviewers
 
-Scan `.agents/agents/reviewers/` for all reviewer agent definitions. Each `.md` file in that directory is a reviewer to run.
+Scan `agents/reviewers/` for all reviewer agent definitions. Each `.md` file in that directory is a reviewer to run.
 
 If the directory is empty or doesn't exist, inform the user and stop.
+
+**Selecting reviewers**: By default, run only the **core reviewers**: `security`, `code-quality`, and `simplicity`. If the user specifies additional reviewers (or `all`), run those too. This keeps the default cost low while still catching the most important issues. Present the list of selected reviewers to the user before launching them.
 
 ### 3. Run reviewers in parallel
 
 Launch all discovered reviewers as parallel sub-agents using `Task`. Each reviewer receives:
 - The list of files to review
-- The diff or file contents as appropriate
+- **The diff only** — never send full file contents. Use `git diff` output so reviewers focus on what changed. Include enough surrounding context lines (`git diff -U8`) for reviewers to understand the change, but no more.
+
+If a reviewer genuinely needs broader file context (e.g., to check an import at the top of a file), it can read the file itself — don't pre-load it.
 
 ### 4. Synthesize and present findings
 
@@ -53,7 +57,7 @@ After presenting findings, ask the user which (if any) they want to fix. Only ma
 
 ## Reviewer agent conventions
 
-Each reviewer in `.agents/agents/reviewers/` must follow the output format defined in `.agents/reviewer-output-format.md`.
+Each reviewer in `agents/reviewers/` must follow the output format defined in `reviewer-output-format.md`.
 
 ## Behavioral rules
 

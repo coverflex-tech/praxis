@@ -4,13 +4,14 @@ import { tmpdir } from "node:os";
 import { Readable } from "node:stream";
 import { extract } from "tar";
 
-const TARBALL_URL =
+const TARBALL_BASE_URL =
   "https://api.github.com/repos/coverflex-tech/praxis/tarball/main";
 
 const MAX_DOWNLOAD_SIZE = 10 * 1024 * 1024; // 10 MB
 
-export async function fetchTemplates() {
-  const res = await fetch(TARBALL_URL, {
+export async function fetchTemplates({ ref = "main" } = {}) {
+  const url = `${TARBALL_BASE_URL}/${encodeURIComponent(ref)}`;
+  const res = await fetch(url, {
     headers: { "User-Agent": "praxis-cli" },
     redirect: "follow",
   });
@@ -45,7 +46,7 @@ export async function fetchTemplates() {
       filter: (path) => {
         const parts = path.split("/").slice(1);
         const relative = parts.join("/");
-        return relative.startsWith(".agents/") || relative === ".agents";
+        return relative.startsWith("praxis/") || relative === "praxis";
       },
     });
 
@@ -57,7 +58,7 @@ export async function fetchTemplates() {
     });
 
     const files = new Map();
-    await collectFiles(join(tmpDir, ".agents"), ".agents", files);
+    await collectFiles(join(tmpDir, "praxis"), "praxis", files);
     return files;
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
